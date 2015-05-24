@@ -1,0 +1,131 @@
+---
+title: "Practical Machine Learning"
+output: html_document
+---
+#Prediction Assignment Writeup
+##Executive Summary
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. The data for this assignment come from this source: <http://groupware.les.inf.puc-rio.br/har>. 
+
+The outcome variable is the 'classe' factor variable that has 5 possible values:
+
+*  exactly according to the specification (Class A)
+
+* throwing the elbows to the front (Class B)
+
+* lifting the dumbbell only halfway (Class C)
+
+* lowering the dumbbell only halfway (Class D)
+
+* throwing the hips to the front (Class E). 
+
+Our goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict the manner in which they did the exercise. 
+
+##Data Acquisition and Analysis
+
+The training data for this project are available here: 
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+
+The test data are available here: 
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+First we'll load the required libraries and fetch the data from the testing and training datasets.
+
+```{r}
+suppressWarnings(library( caret))
+suppressWarnings(library( randomForest))
+suppressWarnings(library( corrplot))
+suppressWarnings(library( rattle))
+
+trainingURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+trainingFile<- "pml-training.csv"
+testingURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+testingFile<- "pml-testing.csv"
+setInternet2(use=TRUE)
+download.file(trainingURL, trainingFile)
+download.file(testingURL, testingFile)
+training <- read.csv( trainingFile,  na.strings=c("NA","#DIV/0!", ""))
+testing <- read.csv( testingFile,  na.strings=c("NA","#DIV/0!", ""))
+
+dim( training)
+dim(testing)
+```
+
+On reviewing the training data with `str()` we see that several variables are NA or with very little variance. 
+
+Next we'll clean the data to discard columns with NA values and near-zero variance data. We'll also discard the id column (so it does not interfere with the learning alogorithms), and columns that are not relevant to the study.
+
+```{r}
+training<- training[,colSums(is.na(training)) == 0]
+nearZero <- nearZeroVar( training)
+training <- training[, -nearZero]
+discardCols<-grep("X|user_name|raw_timestamp_part_1|raw_timestamp_part_2|cvtd_timestamp|num_window", names(training))
+training<- training[, -discardCols]
+
+testing<- testing[,colSums(is.na(testing)) == 0]
+nearZero <- nearZeroVar( testing)
+testing <- testing[, -nearZero]
+discardCols<-grep("X|user_name|raw_timestamp_part_1|raw_timestamp_part_2|cvtd_timestamp|num_window", names(testing))
+testing<- testing[, -discardCols]
+
+dim(training)
+dim(testing)
+```
+
+Our updated training dataset now contains the variables we need for analysis. The testing dataset has also been pared down to the same set of variables- this will allow us to apply our machine learning algorithm built using the training dataset to the testing dataset.
+
+In order to perform a crossvalidation, we'll split the training dataset into two subsets- 70% data for the actual training, and 30% data for the crossvaldation.
+
+```{r}
+inTrain<- createDataPartition( y=training$classe, p=0.7, list=FALSE)
+trainSet<- training[inTrain,]
+xvalidSet<- training[-inTrain,]
+```
+
+Our training `(trainSet)` and cross-validation `(xvalidSet)` datasets now have 53 columns, with the `classe` column as the last column. We'll exclude the 53rd column from our analysis since this is the variable we're trying to predict.
+
+Let's review the correlations between the variables. we'll set `order="FPC"` for the first principal component order. 
+
+```{r}
+trainCor<- cor( trainSet[,-53])
+corrplot(trainCor, order="FPC", method="color", tl.col = "black", tl.cex = 0.5)
+```
+
+The blue color indicates the positive correlation, red color indicates negative correlation. The darker the shade, the stronger the correlation.
+
+##Principle Component Analysis
+For analysis, we'll set the seed to enable reproducibility. And we'll preprocess the training dataset using principle component analysis, and create a prediction based on the preprocessing. We'll also apply the same pca to the crossvalidation dataset.
+
+```{r}
+set.seed( 1234)
+preObj<- preProcess( trainSet[,-53], method="pca", thresh=0.99)
+trainPred<- predict( preObj, trainSet[,-53])
+xvalidPred<- predict( preObj, xvalidSet[,-53])
+```
+
+Next we'll train a random forest model with the `trainControl` method set for crossvalidation. 
+
+```{r}
+trainFit<- train( trainSet$classe ~., method="rf", data=trainPred, trControl = trainControl(method = "cv", number = 5), importance=TRUE)
+trainFit
+```
+
+We'll generate the confusionMatrix using the crossvaliation dataset to review the accuracy of the model generated with the training dataset.
+
+```{r}
+confMat<- confusionMatrix( xvalidSet$classe, predict(trainFit, xvalidPred))
+confMat
+```
+
+The accuracy is `r confMat$overall[1]` and estimated out of sample error is `1-accuracy=` ```r 1-confMat$overall[1]`.
+
+##Prediction
+We'll applying the model (generated using the training set) to the testing data set. 
+
+```{r}
+testPred<- predict( preObj, testing[,-53])
+finalPred<- predict( trainFit, testPred)
+finalPred
+```
+
+The above is the predicted outcome for the test dataset.
